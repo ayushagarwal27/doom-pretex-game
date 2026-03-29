@@ -227,7 +227,7 @@
     </div>
     <div id="hints">
       WASD · ARROWS — MOVE<br />SPACE — SHOOT<br />F — FLASHLIGHT<br />M —
-      MINIMAP<br />G — FULLSCREEN
+      MINIMAP<br />G — FULLSCREEN<br />V — MUTE
     </div>
     <div id="minimap"><canvas id="mc" width="100" height="100"></canvas></div>
     <div id="hud">
@@ -254,41 +254,400 @@
       <div id="od">
         Powered by @chenglou/pretext<br />canvas text measurement · zero DOM
         reflow<br /><br />WASD / ARROWS — MOVE &amp; TURN<br />SPACE — SHOOT · F
-        — FLASHLIGHT<br />M — MINIMAP · G — FULLSCREEN
+        — FLASHLIGHT<br />M — MINIMAP · G — FULLSCREEN · V — MUTE
       </div>
       <div id="ob">[ PRESS SPACE TO BEGIN ]</div>
     </div>
 
     <script>
+      let pretextApi = null;
+      let pretextEnabled = true;
+
       // ── PRETEXT ENGINE ──────────────────────────────────────────────
+      // Uses @chenglou/pretext for accurate, DOM-reflow-free text measurement.
+      // Falls back to canvas-only measurement if CDN import is unavailable.
       const PT = {
-        _c: null,
         _cache: new Map(),
+        _c: null,
+
         init() {
-          const c = document.createElement("canvas");
-          c.width = 1;
-          c.height = 1;
-          this._c = c.getContext("2d");
+          if (!this._c) {
+            const c = document.createElement("canvas");
+            c.width = 1;
+            c.height = 1;
+            this._c = c.getContext("2d");
+          }
         },
-        prepare(font) {
-          if (this._cache.has(font)) return this._cache.get(font);
-          this._c.font = font;
-          const chars =
-            " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~░▒▓█▄▀■□●○◆◇★☆♦♠♣♥@#S%?*+;:,. ╔╗╚╝║═┌┐└┘│─☠♦◆·";
-          const w = {};
-          for (const ch of chars) w[ch] = this._c.measureText(ch).width;
-          const r = { font, w, sp: w[" "] || 6 };
-          this._cache.set(font, r);
-          return r;
+
+        _measure(font, text) {
+          const key = `${font}|${text}`;
+          if (this._cache.has(key)) return this._cache.get(key);
+          let w = 0;
+          if (pretextApi && pretextEnabled) {
+            try {
+              const prepared = pretextApi.prepareWithSegments(text, font);
+              pretextApi.walkLineRanges(prepared, 99999, (line) => {
+                w = line.width;
+              });
+            } catch (e) {
+              // Any pretext runtime issue should never break gameplay loop.
+              pretextEnabled = false;
+              console.warn(
+                "Pretext runtime failed; switching to canvas fallback.",
+                e,
+              );
+              this.init();
+              this._c.font = font;
+              w = this._c.measureText(text).width;
+            }
+          } else {
+            this.init();
+            this._c.font = font;
+            w = this._c.measureText(text).width;
+          }
+          this._cache.set(key, w);
+          return w;
         },
+
         cw(font, ch) {
-          return this.prepare(font).w[ch] ?? this.prepare(font).sp;
+          return this._measure(font, ch);
         },
+
         mw(font, text) {
-          const p = this.prepare(font);
-          let s = 0;
-          for (const ch of text) s += p.w[ch] ?? p.sp;
-          return s;
+          return this._measure(font, text);
+        },
+
+        clearAll() {
+          this._cache.clear();
+          if (pretextApi) pretextApi.clearCache();
+        },
+      };
+
+      // Load pretext asynchronously without blocking game startup.
+      import("https://esm.sh/@chenglou/pretext")
+        .then((mod) => {
+          pretextApi = mod;
+          pretextEnabled = true;
+          PT.clearAll();
+        })
+        .catch((e) => {
+          console.warn("Pretext import failed; using canvas fallback.", e);
+        });
+
+      // ── SOUND ENGINE (Web Audio API — zero files, all synthesized) ──
+      const SFX = {
+        ctx: null,
+        masterGain: null,
+        ambiNode: null,
+        ambiGain: null,
+        footTimer: 0,
+        lastFootStep: 0,
+
+        init() {
+          try {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            this.masterGain = this.ctx.createGain();
+            this.masterGain.gain.value = 0.7;
+            this.masterGain.connect(this.ctx.destination);
+          } catch (e) {
+            console.warn("No audio");
+          }
+        },
+
+        resume() {
+          if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+        },
+
+        // Generic helper: envelope a gain node
+        _env(g, atk, sus, rel, peak = 1) {
+          const t = this.ctx.currentTime;
+          g.gain.setValueAtTime(0, t);
+          g.gain.linearRampToValueAtTime(peak, t + atk);
+          g.gain.setValueAtTime(peak, t + atk + sus);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + atk + sus + rel);
+        },
+
+        // Gunshot — punchy bang + noise tail
+        shoot() {
+          if (!this.ctx) return;
+          const t = this.ctx.currentTime;
+
+          // Tonal thump
+          const osc = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(180, t);
+          osc.frequency.exponentialRampToValueAtTime(40, t + 0.08);
+          g.gain.setValueAtTime(0.9, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+          osc.connect(g);
+          g.connect(this.masterGain);
+          osc.start(t);
+          osc.stop(t + 0.13);
+
+          // Noise crack
+          const bufSize = this.ctx.sampleRate * 0.15;
+          const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+          const data = buf.getChannelData(0);
+          for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+          const noise = this.ctx.createBufferSource();
+          noise.buffer = buf;
+          const ng = this.ctx.createGain();
+          const filt = this.ctx.createBiquadFilter();
+          filt.type = "bandpass";
+          filt.frequency.value = 1800;
+          filt.Q.value = 0.8;
+          ng.gain.setValueAtTime(0.6, t);
+          ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+          noise.connect(filt);
+          filt.connect(ng);
+          ng.connect(this.masterGain);
+          noise.start(t);
+          noise.stop(t + 0.15);
+
+          // Short reverb tail
+          this._reverb(0.08, 0.12);
+        },
+
+        // Enemy hit — metallic clank
+        hit() {
+          if (!this.ctx) return;
+          const t = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(320 + Math.random() * 80, t);
+          osc.frequency.exponentialRampToValueAtTime(80, t + 0.08);
+          g.gain.setValueAtTime(0.4, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+          const dist = this.ctx.createWaveShaper();
+          dist.curve = this._distCurve(80);
+          osc.connect(dist);
+          dist.connect(g);
+          g.connect(this.masterGain);
+          osc.start(t);
+          osc.stop(t + 0.11);
+        },
+
+        // Enemy death — descending roar
+        death() {
+          if (!this.ctx) return;
+          const t = this.ctx.currentTime;
+          // Low growl
+          const osc = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          osc.type = "sawtooth";
+          osc.frequency.setValueAtTime(90, t);
+          osc.frequency.exponentialRampToValueAtTime(20, t + 0.5);
+          g.gain.setValueAtTime(0.6, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+          const filt = this.ctx.createBiquadFilter();
+          filt.type = "lowpass";
+          filt.frequency.value = 400;
+          osc.connect(filt);
+          filt.connect(g);
+          g.connect(this.masterGain);
+          osc.start(t);
+          osc.stop(t + 0.6);
+          // Noise burst
+          this._noiseBurst(t, 0.3, 200, 0.5);
+        },
+
+        // Player takes damage — low thud
+        playerHit() {
+          if (!this.ctx) return;
+          const t = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const g = this.ctx.createGain();
+          osc.type = "sine";
+          osc.frequency.setValueAtTime(60, t);
+          osc.frequency.exponentialRampToValueAtTime(25, t + 0.25);
+          g.gain.setValueAtTime(0.8, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+          osc.connect(g);
+          g.connect(this.masterGain);
+          osc.start(t);
+          osc.stop(t + 0.32);
+          // High freq impact
+          this._noiseBurst(t, 0.05, 800, 0.3);
+        },
+
+        // Enemy nearby growl — called spatially
+        growl(distRatio) {
+          if (!this.ctx) return;
+          const vol = Math.max(0, (1 - distRatio) * 0.22);
+          if (vol < 0.02) return;
+          const t = this.ctx.currentTime;
+          const osc = this.ctx.createOscillator();
+          const lfo = this.ctx.createOscillator();
+          const lfoG = this.ctx.createGain();
+          const g = this.ctx.createGain();
+          osc.type = "sawtooth";
+          const baseFreq = 55 + Math.random() * 30;
+          osc.frequency.value = baseFreq;
+          lfo.type = "sine";
+          lfo.frequency.value = 4 + Math.random() * 3;
+          lfoG.gain.value = 15;
+          lfo.connect(lfoG);
+          lfoG.connect(osc.frequency);
+          g.gain.setValueAtTime(vol, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+          const filt = this.ctx.createBiquadFilter();
+          filt.type = "lowpass";
+          filt.frequency.value = 300;
+          osc.connect(filt);
+          filt.connect(g);
+          g.connect(this.masterGain);
+          lfo.start(t);
+          osc.start(t);
+          lfo.stop(t + 0.4);
+          osc.stop(t + 0.42);
+        },
+
+        // Footstep — soft thud on stone
+        footstep(moving) {
+          if (!this.ctx || !moving) return;
+          this.footTimer++;
+          if (this.footTimer - this.lastFootStep < 22) return;
+          this.lastFootStep = this.footTimer;
+          const t = this.ctx.currentTime;
+          this._noiseBurst(t, 0.04, 120 + Math.random() * 60, 0.08);
+        },
+
+        // Player death — dramatic sting
+        playerDeath() {
+          if (!this.ctx) return;
+          const t = this.ctx.currentTime;
+          // Descending chord
+          [80, 100, 130].forEach((freq, i) => {
+            const osc = this.ctx.createOscillator();
+            const g = this.ctx.createGain();
+            osc.type = "sawtooth";
+            osc.frequency.setValueAtTime(freq, t + i * 0.06);
+            osc.frequency.exponentialRampToValueAtTime(freq * 0.3, t + 1.2);
+            g.gain.setValueAtTime(0.3, t + i * 0.06);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+            const filt = this.ctx.createBiquadFilter();
+            filt.type = "lowpass";
+            filt.frequency.value = 600;
+            osc.connect(filt);
+            filt.connect(g);
+            g.connect(this.masterGain);
+            osc.start(t + i * 0.06);
+            osc.stop(t + 1.6);
+          });
+        },
+
+        // Ambient dungeon drone — runs continuously
+        startAmbience() {
+          if (!this.ctx || this.ambiNode) return;
+          // Low rumble
+          const osc1 = this.ctx.createOscillator();
+          const osc2 = this.ctx.createOscillator();
+          const osc3 = this.ctx.createOscillator();
+          this.ambiGain = this.ctx.createGain();
+          this.ambiGain.gain.value = 0.0;
+          osc1.type = "sine";
+          osc1.frequency.value = 38;
+          osc2.type = "sine";
+          osc2.frequency.value = 41.2;
+          osc3.type = "triangle";
+          osc3.frequency.value = 55;
+          const filt = this.ctx.createBiquadFilter();
+          filt.type = "lowpass";
+          filt.frequency.value = 180;
+          osc1.connect(filt);
+          osc2.connect(filt);
+          osc3.connect(filt);
+          filt.connect(this.ambiGain);
+          this.ambiGain.connect(this.masterGain);
+          osc1.start();
+          osc2.start();
+          osc3.start();
+          this.ambiGain.gain.linearRampToValueAtTime(
+            0.18,
+            this.ctx.currentTime + 2,
+          );
+
+          // Distant drip/creak every few seconds
+          this._scheduleCreaks();
+        },
+
+        _scheduleCreaks() {
+          if (!this.ctx) return;
+          const delay = 3000 + Math.random() * 5000;
+          setTimeout(() => {
+            if (!S.started) {
+              this._scheduleCreaks();
+              return;
+            }
+            const t = this.ctx.currentTime;
+            const r = Math.random();
+            if (r < 0.5) {
+              // Drip
+              this._noiseBurst(t, 0.02, 1200, 0.04);
+              setTimeout(
+                () => this._noiseBurst(this.ctx.currentTime, 0.015, 900, 0.03),
+                80,
+              );
+            } else {
+              // Creak
+              const osc = this.ctx.createOscillator();
+              const g = this.ctx.createGain();
+              osc.type = "sawtooth";
+              osc.frequency.setValueAtTime(200 + Math.random() * 100, t);
+              osc.frequency.linearRampToValueAtTime(80, t + 0.3);
+              g.gain.setValueAtTime(0.06, t);
+              g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+              osc.connect(g);
+              g.connect(this.masterGain);
+              osc.start(t);
+              osc.stop(t + 0.36);
+            }
+            this._scheduleCreaks();
+          }, delay);
+        },
+
+        // Helpers
+        _noiseBurst(t, dur, freq, vol) {
+          const bufSize = Math.ceil(this.ctx.sampleRate * (dur + 0.01));
+          const buf = this.ctx.createBuffer(1, bufSize, this.ctx.sampleRate);
+          const d = buf.getChannelData(0);
+          for (let i = 0; i < bufSize; i++) d[i] = Math.random() * 2 - 1;
+          const src = this.ctx.createBufferSource();
+          src.buffer = buf;
+          const filt = this.ctx.createBiquadFilter();
+          filt.type = "bandpass";
+          filt.frequency.value = freq;
+          filt.Q.value = 1.2;
+          const g = this.ctx.createGain();
+          g.gain.setValueAtTime(vol, t);
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+          src.connect(filt);
+          filt.connect(g);
+          g.connect(this.masterGain);
+          src.start(t);
+          src.stop(t + dur + 0.01);
+        },
+
+        _reverb(dur, vol) {
+          const t = this.ctx.currentTime + 0.05;
+          this._noiseBurst(t, dur, 600 + Math.random() * 400, vol * 0.15);
+        },
+
+        _distCurve(amount) {
+          const n = 256,
+            curve = new Float32Array(n);
+          for (let i = 0; i < n; i++) {
+            const x = (i * 2) / n - 1;
+            curve[i] =
+              ((Math.PI + amount) * x) / (Math.PI + amount * Math.abs(x));
+          }
+          return curve;
+        },
+
+        setMasterVol(v) {
+          if (this.masterGain) this.masterGain.gain.value = v;
         },
       };
 
@@ -308,7 +667,7 @@
         rc.height = H;
         ac.width = W;
         ac.height = H;
-        PT._cache.clear();
+        PT.clearAll();
       }
       resize();
       addEventListener("resize", resize);
@@ -360,6 +719,7 @@
         maxhp: 10,
         flash: true,
         mmap: true,
+        muted: false,
         sc: 0,
         dc: 0,
         df: 0,
@@ -771,6 +1131,9 @@
         if (!S.started) return;
         S.t++;
         const pl = S.pl;
+        const moving =
+          keys["w"] || keys["arrowup"] || keys["s"] || keys["arrowdown"];
+        SFX.footstep(moving);
         if (keys["w"] || keys["arrowup"]) {
           const nx = pl.x + Math.cos(pl.ang) * SPD,
             ny = pl.y + Math.sin(pl.ang) * SPD;
@@ -788,6 +1151,7 @@
         if (S.sc > 0) S.sc--;
         if (keys[" "] && S.sc === 0) {
           S.sc = 14;
+          SFX.shoot();
           const h = cast(pl.x, pl.y, pl.ang);
           S.enemies.forEach((e) => {
             if (!e.alive) return;
@@ -805,10 +1169,12 @@
               e.hp--;
               spawnP(e.x, e.y, "#ff3355");
               flashK();
+              SFX.hit();
               if (e.hp <= 0) {
                 e.alive = false;
                 S.kills++;
                 spawnP(e.x, e.y, "#ffb300");
+                SFX.death();
               }
             }
           });
@@ -832,13 +1198,18 @@
               S.hp = Math.max(0, S.hp - 1);
               S.df = 1;
               S.dc = 45;
+              SFX.playerHit();
             }
+            // Occasional growl when close
+            if (dist < e.ar * 0.6 && Math.random() < 0.004)
+              SFX.growl(dist / (MAXD * CELL));
           }
         });
         if (S.dc > 0) S.dc--;
         if (S.df > 0) S.df -= 0.07;
         if (S.hp <= 0 && S.started) {
           S.started = false;
+          SFX.playerDeath();
           document.getElementById("ot").textContent = "YOU DIED";
           document.getElementById("ot").style.color = "#ff3355";
           document.getElementById("os").textContent = `KILLS: ${S.kills}`;
@@ -899,6 +1270,11 @@
           document.fullscreenElement
             ? document.exitFullscreen()
             : document.documentElement.requestFullscreen();
+        if (k === "v") {
+          S.muted = !S.muted;
+          SFX.setMasterVol(S.muted ? 0 : 0.7);
+        }
+        SFX.resume();
         if (
           [" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)
         )
@@ -917,6 +1293,8 @@
         S.dc = 0;
         S.df = 0;
         spawnEnemies();
+        SFX.resume();
+        SFX.startAmbience();
         document.getElementById("overlay").classList.add("off");
       }
 
@@ -973,6 +1351,7 @@
 
       // ── BOOT ──────────────────────────────────────────────────────────
       PT.init();
+      SFX.init();
       spawnEnemies();
       function loop() {
         update();
