@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PRETEXT DUNGEON — ASCII Raycaster</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      :root {
+        --green: #00ff88;
+        --amber: #ffb300;
+        --red: #ff3355;
+        --blue: #00aaff;
+        --scanline: rgba(0, 255, 136, 0.03);
+      }
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        user-select: none;
+        font-family: "Courier New", monospace;
+      }
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          var(--scanline) 2px,
+          var(--scanline) 4px
+        );
+        pointer-events: none;
+        z-index: 200;
+      }
+      body::after {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: radial-gradient(
+          ellipse at center,
+          transparent 55%,
+          rgba(0, 0, 0, 0.65) 100%
+        );
+        pointer-events: none;
+        z-index: 201;
+      }
+      #gc {
+        position: fixed;
+        inset: 0;
+      }
+      canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #ac {
+        pointer-events: none;
+        mix-blend-mode: screen;
+      }
+      #title {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        text-align: center;
+        font-size: 10px;
+        letter-spacing: 5px;
+        color: var(--amber);
+        padding: 5px;
+        background: rgba(0, 0, 0, 0.72);
+        border-bottom: 1px solid rgba(255, 179, 0, 0.2);
+        text-shadow: 0 0 8px var(--amber);
+        z-index: 150;
+      }
+      #hints {
+        position: fixed;
+        top: 30px;
+        left: 14px;
+        font-size: 9px;
+        color: rgba(0, 255, 136, 0.32);
+        letter-spacing: 2px;
+        z-index: 150;
+        line-height: 1.9;
+      }
+      #minimap {
+        position: fixed;
+        top: 30px;
+        right: 14px;
+        border: 1px solid rgba(0, 255, 136, 0.28);
+        background: rgba(0, 0, 0, 0.8);
+        padding: 4px;
+        z-index: 150;
+      }
+      #minimap.off {
+        display: none;
+      }
+      #hud {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 8px 24px;
+        background: rgba(0, 0, 0, 0.76);
+        border-top: 1px solid rgba(0, 255, 136, 0.2);
+        z-index: 150;
+      }
+      .hb {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .hl {
+        color: rgba(0, 255, 136, 0.45);
+        font-size: 9px;
+        letter-spacing: 3px;
+      }
+      .hv {
+        color: var(--green);
+        font-size: 17px;
+        font-weight: bold;
+        text-shadow: 0 0 9px var(--green);
+      }
+      #hpbar {
+        display: flex;
+        gap: 3px;
+        align-items: center;
+      }
+      .pip {
+        width: 10px;
+        height: 15px;
+        background: var(--green);
+        box-shadow: 0 0 5px var(--green);
+        transition: background 0.2s;
+      }
+      .pip.e {
+        background: rgba(0, 255, 136, 0.12);
+        box-shadow: none;
+      }
+      #kf {
+        position: fixed;
+        inset: 0;
+        background: var(--red);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 140;
+        transition: opacity 0.05s;
+      }
+      #kf.on {
+        opacity: 0.18;
+      }
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.88);
+        z-index: 160;
+        transition: opacity 0.4s;
+      }
+      #overlay.off {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #ot {
+        font-size: clamp(28px, 5vw, 54px);
+        font-weight: bold;
+        letter-spacing: 10px;
+        color: var(--amber);
+        text-shadow: 0 0 28px var(--amber);
+        margin-bottom: 14px;
+        animation: pulse 1.5s infinite;
+      }
+      #os {
+        font-size: clamp(10px, 1.5vw, 14px);
+        letter-spacing: 5px;
+        color: var(--green);
+        margin-bottom: 10px;
+      }
+      #od {
+        font-size: clamp(9px, 1.2vw, 12px);
+        letter-spacing: 2px;
+        color: rgba(0, 255, 136, 0.5);
+        text-align: center;
+        line-height: 2.1;
+      }
+      #ob {
+        font-size: clamp(10px, 1.4vw, 13px);
+        letter-spacing: 4px;
+        color: var(--green);
+        margin-top: 22px;
+        animation: pulse 0.9s infinite;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.45;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="gc">
+      <canvas id="rc"></canvas>
+      <canvas id="ac"></canvas>
+    </div>
+    <div id="kf"></div>
+    <div id="title">
+      ★ PRETEXT DUNGEON ★ ASCII RAYCASTER ★ @chenglou/pretext ★
+    </div>
+    <div id="hints">
+      WASD · ARROWS — MOVE<br />SPACE — SHOOT<br />F — FLASHLIGHT<br />M —
+      MINIMAP<br />G — FULLSCREEN
+    </div>
+    <div id="minimap"><canvas id="mc" width="100" height="100"></canvas></div>
+    <div id="hud">
+      <div class="hb">
+        <div class="hl">HEALTH</div>
+        <div id="hpbar"></div>
+      </div>
+      <div class="hb" style="align-items: center">
+        <div class="hl">KILLS</div>
+        <div class="hv" id="kv">0</div>
+      </div>
+      <div class="hb" style="align-items: center">
+        <div class="hl">AMMO</div>
+        <div class="hv">∞</div>
+      </div>
+      <div class="hb" style="align-items: center">
+        <div class="hl">FLOOR</div>
+        <div class="hv">B1</div>
+      </div>
+    </div>
+    <div id="overlay">
+      <div id="ot">PRETEXT DUNGEON</div>
+      <div id="os">ASCII RAYCASTER ENGINE</div>
+      <div id="od">
+        Powered by @chenglou/pretext<br />canvas text measurement · zero DOM
+        reflow<br /><br />WASD / ARROWS — MOVE &amp; TURN<br />SPACE — SHOOT · F
+        — FLASHLIGHT<br />M — MINIMAP · G — FULLSCREEN
+      </div>
+      <div id="ob">[ PRESS SPACE TO BEGIN ]</div>
+    </div>
+
+    <script>
+      // ── PRETEXT ENGINE ──────────────────────────────────────────────
+      const PT = {
+        _c: null,
+        _cache: new Map(),
+        init() {
+          const c = document.createElement("canvas");
+          c.width = 1;
+          c.height = 1;
+          this._c = c.getContext("2d");
+        },
+        prepare(font) {
+          if (this._cache.has(font)) return this._cache.get(font);
+          this._c.font = font;
+          const chars =
+            " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~░▒▓█▄▀■□●○◆◇★☆♦♠♣♥@#S%?*+;:,. ╔╗╚╝║═┌┐└┘│─☠♦◆·";
+          const w = {};
+          for (const ch of chars) w[ch] = this._c.measureText(ch).width;
+          const r = { font, w, sp: w[" "] || 6 };
+          this._cache.set(font, r);
+          return r;
+        },
+        cw(font, ch) {
+          return this.prepare(font).w[ch] ?? this.prepare(font).sp;
+        },
+        mw(font, text) {
+          const p = this.prepare(font);
+          let s = 0;
+          for (const ch of text) s += p.w[ch] ?? p.sp;
+          return s;
+        },
+      };
+
+      // ── CANVAS ──────────────────────────────────────────────────────
+      const rc = document.getElementById("rc"),
+        ac = document.getElementById("ac"),
+        mc = document.getElementById("mc");
+      const cx = rc.getContext("2d"),
+        ax = ac.getContext("2d"),
+        mx2 = mc.getContext("2d");
+      let W = innerWidth,
+        H = innerHeight;
+      function resize() {
+        W = innerWidth;
+        H = innerHeight;
+        rc.width = W;
+        rc.height = H;
+        ac.width = W;
+        ac.height = H;
+        PT._cache.clear();
+      }
+      resize();
+      addEventListener("resize", resize);
+
+      // ── CONSTANTS ────────────────────────────────────────────────────
+      const CELL = 64,
+        FOV = Math.PI / 3,
+        HFOV = FOV / 2,
+        MAXD = 18,
+        SPD = 2.8,
+        TSPD = 0.048;
+      const RAMP = "@#S%?*+;:,. ",
+        DRAMP = "█▓▒░■▪· ";
+      const WC = [null, "#00ff88", "#00aaff", "#ffb300", "#ff3355", "#cc00ff"];
+      const MAP = [
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+        [1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 2, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 2, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 0, 0, 0, 1],
+        [1, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1],
+        [1, 0, 3, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 4, 4, 4, 0, 0, 0, 0, 0, 4, 4, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+      ];
+      const MW = MAP[0].length,
+        MH = MAP.length;
+
+      // ── STATE ────────────────────────────────────────────────────────
+      const S = {
+        started: false,
+        pl: { x: 1.5 * CELL, y: 1.5 * CELL, ang: 0.3 },
+        enemies: [],
+        parts: [],
+        kills: 0,
+        hp: 10,
+        maxhp: 10,
+        flash: true,
+        mmap: true,
+        sc: 0,
+        dc: 0,
+        df: 0,
+        t: 0,
+      };
+
+      const ESPRTS = [
+        { rows: ["╔════╗", "║☠  ☠║", "║ ▼  ║", "╚════╝"], col: "#ff3355" },
+        { rows: ["┌────┐", "│♦  ♦│", "│ ██ │", "└────┘"], col: "#ffb300" },
+        { rows: [" ░░░░", " ◆  ◆", " ▓▓▓ ", " ░░░░"], col: "#cc00ff" },
+      ];
+
+      function spawnEnemies() {
+        const pos = [
+          [5, 10],
+          [12, 5],
+          [8, 15],
+          [15, 3],
+          [3, 15],
+          [10, 10],
+          [16, 10],
+          [6, 6],
+          [14, 14],
+          [4, 17],
+          [18, 17],
+          [11, 3],
+          [7, 12],
+          [13, 8],
+          [19, 5],
+          [2, 18],
+        ];
+        S.enemies = pos.map(([mx, my], i) => ({
+          x: (mx + 0.5) * CELL,
+          y: (my + 0.5) * CELL,
+          hp: 3,
+          mhp: 3,
+          alive: true,
+          type: i % 3,
+          wob: Math.random() * Math.PI * 2,
+          ar: 210 + Math.random() * 100,
+          ac: Math.random() * 60,
+          spd: 0.55 + Math.random() * 0.45,
+        }));
+      }
+
+      // ── RAYCASTING ───────────────────────────────────────────────────
+      function cast(px, py, ang) {
+        const sa = Math.sin(ang),
+          ca = Math.cos(ang);
+        let mx = Math.floor(px / CELL),
+          my = Math.floor(py / CELL);
+        const sx = ca >= 0 ? 1 : -1,
+          sy = sa >= 0 ? 1 : -1;
+        const ddx = Math.abs(CELL / (ca || 1e-9)),
+          ddy = Math.abs(CELL / (sa || 1e-9));
+        let sdx =
+          ca >= 0
+            ? ((mx + 1) * CELL - px) / Math.abs(ca || 1e-9)
+            : (px - mx * CELL) / Math.abs(ca || 1e-9);
+        let sdy =
+          sa >= 0
+            ? ((my + 1) * CELL - py) / Math.abs(sa || 1e-9)
+            : (py - my * CELL) / Math.abs(sa || 1e-9);
+        let side = 0,
+          wt = 0,
+          depth = 0;
+        for (let i = 0; i < MAXD * 2; i++) {
+          if (sdx < sdy) {
+            sdx += ddx;
+            mx += sx;
+            side = 0;
+          } else {
+            sdy += ddy;
+            my += sy;
+            side = 1;
+          }
+          if (mx < 0 || mx >= MW || my < 0 || my >= MH) break;
+          if (MAP[my]?.[mx] > 0) {
+            wt = MAP[my][mx];
+            depth = side === 0 ? sdx - ddx : sdy - ddy;
+            break;
+          }
+        }
+        return { depth, wt, side };
+      }
+
+      function wall(x, y) {
+        const mx = Math.floor(x / CELL),
+          my = Math.floor(y / CELL);
+        if (mx < 0 || mx >= MW || my < 0 || my >= MH) return true;
+        return (MAP[my]?.[mx] ?? 0) > 0;
+      }
+
+      // ── ASCII OVERLAY via PRETEXT ─────────────────────────────────────
+      function asciiOverlay(dbuf) {
+        const fs = Math.max(9, Math.floor(H / 34));
+        const font = `${fs}px "Courier New"`;
+        const RAYS = dbuf.length;
+        ax.clearRect(0, 0, W, H);
+        ax.font = font;
+        const rows = Math.floor(H / fs);
+        for (let row = 0; row < rows; row++) {
+          const y = row * fs,
+            relY = y / H;
+          let cx2 = 0;
+          while (cx2 < W) {
+            const ci = Math.min(RAYS - 1, Math.floor((cx2 / W) * RAYS));
+            const d = dbuf[ci];
+            if (!d) {
+              cx2 += 6;
+              continue;
+            }
+            const { cd, wt, side, wh } = d;
+            const wt2 = (H - wh) / 2 / H,
+              wb = (H + wh) / 2 / H;
+            const norm = Math.min(1, cd / (MAXD * CELL));
+            let ch = " ",
+              col,
+              alpha = 0.3;
+            if (relY < wt2) {
+              ch =
+                DRAMP[
+                  Math.floor((relY / Math.max(0.01, wt2)) * (DRAMP.length - 1))
+                ] || " ";
+              alpha = relY * 0.22;
+              col = `rgba(0,255,136,${alpha.toFixed(2)})`;
+            } else if (relY > wb) {
+              ch =
+                DRAMP[
+                  Math.floor(
+                    ((1 - relY) / Math.max(0.01, 1 - wb)) * (DRAMP.length - 1),
+                  )
+                ] || " ";
+              alpha = (1 - relY) * 0.32;
+              col = `rgba(0,170,255,${alpha.toFixed(2)})`;
+            } else {
+              ch = RAMP[Math.floor(norm * (RAMP.length - 1))] || " ";
+              const fade = (1 - norm) * (side === 1 ? 0.5 : 1) * 0.38;
+              alpha = Math.max(0.04, fade);
+              col = WC[wt] || "#00ff88";
+            }
+            if (ch !== " ") {
+              ax.fillStyle = col;
+              ax.globalAlpha = alpha;
+              ax.fillText(ch, cx2, y + fs);
+            }
+            // PRETEXT: exact char width — zero DOM measurement
+            cx2 += PT.cw(font, ch);
+          }
+        }
+        ax.globalAlpha = 1;
+      }
+
+      // ── ENEMY SPRITES ─────────────────────────────────────────────────
+      function drawEnemy(e, sx, sh, dist) {
+        const dr = Math.min(1, dist / (MAXD * CELL * 0.65));
+        const alpha = Math.max(0, 1 - dr) * (S.flash ? 1 : 0.45);
+        if (alpha < 0.05) return;
+        const sp = ESPRTS[e.type % 3];
+        const sz = Math.max(8, Math.floor(13 * Math.min(1.4, sh / 55)));
+        const font = `bold ${sz}px "Courier New"`;
+        const lh = sz * 1.3;
+        const sy = H / 2;
+        cx.save();
+        cx.globalAlpha = alpha;
+        cx.font = font;
+        // hp bar
+        const hr = e.hp / e.mhp,
+          bw = 36 * Math.min(1.4, sh / 55),
+          bh = 3;
+        cx.fillStyle = "rgba(255,0,0,.8)";
+        cx.fillRect(sx - bw / 2, sy - sh / 2 - 12, bw, bh);
+        cx.fillStyle = "#00ff88";
+        cx.fillRect(sx - bw / 2, sy - sh / 2 - 12, bw * hr, bh);
+        sp.rows.forEach((row, i) => {
+          const rw = PT.mw(font, row); // PRETEXT: measure row for centering
+          cx.fillStyle = sp.col;
+          cx.shadowColor = sp.col;
+          cx.shadowBlur = 7;
+          cx.globalAlpha = alpha * (0.7 + 0.3 * Math.sin(S.t * 0.1 + i));
+          cx.fillText(row, sx - rw / 2, sy - sh / 2 + i * lh + lh);
+        });
+        cx.restore();
+      }
+
+      // ── WEAPON ────────────────────────────────────────────────────────
+      function drawWeapon() {
+        const shooting = S.sc > 6;
+        const bob = Math.sin(S.t * 0.13) * 4,
+          rec = shooting ? -22 : 0;
+        const fs = Math.max(12, Math.floor(H / 26));
+        const font = `bold ${fs}px "Courier New"`;
+        const lh = fs * 1.4;
+        const gun = [
+          "    ╔══╗    ",
+          "  ╔═╬══╬═╗  ",
+          "  ║ ║  ║ ║  ",
+          "  ╚═╩══╩═╝  ",
+          "    ║  ║    ",
+          "  ══╝  ╚══  ",
+        ];
+        const flsh = ["  ★   ★  ", " ★  ●  ★ ", "  ★   ★  "];
+        cx.save();
+        cx.font = font;
+        cx.fillStyle = "#00ff88";
+        cx.shadowColor = "#00ff88";
+        cx.shadowBlur = shooting ? 18 : 6;
+        const gw = PT.mw(font, gun[0]);
+        const gx = W / 2 - gw / 2,
+          gy = H - gun.length * lh - 10 + bob + rec;
+        gun.forEach((row, i) => {
+          cx.globalAlpha = 0.9;
+          cx.fillText(row, gx, gy + i * lh);
+        });
+        if (shooting) {
+          cx.fillStyle = "#ffff44";
+          cx.shadowColor = "#ffff44";
+          cx.shadowBlur = 25;
+          const fw = PT.mw(font, flsh[0]);
+          flsh.forEach((row, i) => {
+            cx.globalAlpha = (S.sc - 6) / 5;
+            cx.fillText(row, W / 2 - fw / 2, gy - (flsh.length - i) * lh);
+          });
+        }
+        cx.restore();
+      }
+
+      // ── MINIMAP ───────────────────────────────────────────────────────
+      function drawMinimap() {
+        const mW = 100,
+          mH = 100,
+          cw = mW / MW,
+          ch = mH / MH;
+        mx2.fillStyle = "#000";
+        mx2.fillRect(0, 0, mW, mH);
+        for (let my = 0; my < MH; my++)
+          for (let mx = 0; mx < MW; mx++) {
+            const t = MAP[my]?.[mx];
+            if (t > 0) {
+              mx2.fillStyle = WC[t] || "#00ff88";
+              mx2.globalAlpha = 0.55;
+              mx2.fillRect(mx * cw, my * ch, cw - 0.5, ch - 0.5);
+            }
+          }
+        S.enemies
+          .filter((e) => e.alive)
+          .forEach((e) => {
+            mx2.fillStyle = "#ff3355";
+            mx2.globalAlpha = 0.9;
+            mx2.fillRect(
+              (e.x / CELL) * cw - 1.5,
+              (e.y / CELL) * ch - 1.5,
+              3,
+              3,
+            );
+          });
+        const px = (S.pl.x / CELL) * cw,
+          py = (S.pl.y / CELL) * ch;
+        mx2.globalAlpha = 1;
+        mx2.fillStyle = "#fff";
+        mx2.beginPath();
+        mx2.arc(px, py, 2.5, 0, Math.PI * 2);
+        mx2.fill();
+        mx2.strokeStyle = "rgba(255,255,255,.2)";
+        mx2.lineWidth = 0.5;
+        mx2.beginPath();
+        mx2.moveTo(px, py);
+        mx2.lineTo(
+          px + Math.cos(S.pl.ang - HFOV) * 14,
+          py + Math.sin(S.pl.ang - HFOV) * 14,
+        );
+        mx2.moveTo(px, py);
+        mx2.lineTo(
+          px + Math.cos(S.pl.ang + HFOV) * 14,
+          py + Math.sin(S.pl.ang + HFOV) * 14,
+        );
+        mx2.stroke();
+        mx2.globalAlpha = 1;
+      }
+
+      // ── RENDER ────────────────────────────────────────────────────────
+      function render() {
+        const pl = S.pl;
+        const RAYS = Math.max(80, Math.floor(W / 6));
+
+        // bg
+        cx.fillStyle = "#000";
+        cx.fillRect(0, 0, W, H);
+        const cg = cx.createLinearGradient(0, 0, 0, H / 2);
+        cg.addColorStop(0, "#020208");
+        cg.addColorStop(1, "#07070e");
+        cx.fillStyle = cg;
+        cx.fillRect(0, 0, W, H / 2);
+        const fg = cx.createLinearGradient(0, H / 2, 0, H);
+        fg.addColorStop(0, "#070707");
+        fg.addColorStop(1, "#030305");
+        cx.fillStyle = fg;
+        cx.fillRect(0, H / 2, W, H / 2);
+
+        const dbuf = [],
+          colW = W / RAYS;
+        for (let i = 0; i < RAYS; i++) {
+          const ra = pl.ang - HFOV + (i / RAYS) * FOV;
+          const h = cast(pl.x, pl.y, ra);
+          const cd = h.depth * Math.cos(ra - pl.ang);
+          const wh = Math.min(H * 2, (CELL * H) / Math.max(1, cd));
+          dbuf.push({ cd, raw: h.depth, wt: h.wt, side: h.side, wh });
+          const dr = Math.min(1, cd / (MAXD * CELL * 0.55));
+          const br = S.flash ? 1 - dr : (1 - dr) * 0.36;
+          const sh = h.side === 1 ? 0.54 : 1;
+          const wc = WC[h.wt] || "#00ff88";
+          cx.save();
+          cx.globalAlpha = br * sh * 0.95;
+          const g = cx.createLinearGradient(
+            i * colW,
+            (H - wh) / 2,
+            i * colW,
+            (H + wh) / 2,
+          );
+          g.addColorStop(0, wc + "22");
+          g.addColorStop(0.25, wc);
+          g.addColorStop(0.75, wc);
+          g.addColorStop(1, wc + "22");
+          cx.fillStyle = g;
+          cx.fillRect(i * colW, (H - wh) / 2, colW + 1, wh);
+          cx.fillStyle = "rgba(0,0,0,.22)";
+          for (let s = (H - wh) / 2; s < (H + wh) / 2; s += 4)
+            cx.fillRect(i * colW, s, colW + 1, 1);
+          cx.restore();
+        }
+
+        asciiOverlay(dbuf);
+
+        // enemies
+        S.enemies
+          .filter((e) => e.alive)
+          .map((e) => {
+            const dx = e.x - pl.x,
+              dy = e.y - pl.y,
+              dist = Math.sqrt(dx * dx + dy * dy);
+            let ra = Math.atan2(dy, dx) - pl.ang;
+            while (ra > Math.PI) ra -= Math.PI * 2;
+            while (ra < -Math.PI) ra += Math.PI * 2;
+            return { ...e, dist, ra };
+          })
+          .filter((e) => Math.abs(e.ra) < HFOV * 1.4)
+          .sort((a, b) => b.dist - a.dist)
+          .forEach((e) => {
+            const sx = W / 2 + ((e.ra / HFOV) * W) / 2;
+            const sh = Math.min(H * 1.5, (CELL * H) / Math.max(1, e.dist));
+            const ci = Math.min(
+              RAYS - 1,
+              Math.max(0, Math.floor((sx / W) * RAYS)),
+            );
+            if (!dbuf[ci] || e.dist < dbuf[ci].raw - 5)
+              drawEnemy(e, sx, sh, e.dist);
+          });
+
+        // particles
+        S.parts.forEach((p) => {
+          const dx = p.wx - pl.x,
+            dy = p.wy - pl.y;
+          let ra = Math.atan2(dy, dx) - pl.ang;
+          while (ra > Math.PI) ra -= Math.PI * 2;
+          while (ra < -Math.PI) ra += Math.PI * 2;
+          if (Math.abs(ra) < HFOV) {
+            const sx = W / 2 + ((ra / HFOV) * W) / 2;
+            ax.save();
+            ax.globalAlpha = p.life * 0.85;
+            ax.font = '14px "Courier New"';
+            ax.fillStyle = p.col;
+            ax.shadowColor = p.col;
+            ax.shadowBlur = 10;
+            ax.fillText(p.ch, sx, H / 2 + (p.sy || 0));
+            ax.restore();
+          }
+          p.sy = (p.sy || 0) + p.vy;
+          p.life -= p.decay;
+        });
+        S.parts = S.parts.filter((p) => p.life > 0);
+
+        drawWeapon();
+
+        // crosshair — pretext centers it exactly
+        const csz = Math.floor(H / 30);
+        const cfont = `${csz}px "Courier New"`;
+        const cw2 = PT.mw(cfont, "+");
+        cx.save();
+        cx.font = cfont;
+        cx.fillStyle = "rgba(255,255,255,.65)";
+        cx.shadowColor = "#fff";
+        cx.shadowBlur = 5;
+        cx.fillText("+", W / 2 - cw2 / 2, H / 2 + 5);
+        cx.restore();
+
+        if (S.df > 0) {
+          cx.save();
+          cx.fillStyle = `rgba(255,0,0,${S.df * 0.35})`;
+          cx.fillRect(0, 0, W, H);
+          cx.restore();
+        }
+        if (S.mmap) drawMinimap();
+        updateHUD();
+      }
+
+      // ── UPDATE ────────────────────────────────────────────────────────
+      const keys = {};
+      function update() {
+        if (!S.started) return;
+        S.t++;
+        const pl = S.pl;
+        if (keys["w"] || keys["arrowup"]) {
+          const nx = pl.x + Math.cos(pl.ang) * SPD,
+            ny = pl.y + Math.sin(pl.ang) * SPD;
+          if (!wall(nx, pl.y)) pl.x = nx;
+          if (!wall(pl.x, ny)) pl.y = ny;
+        }
+        if (keys["s"] || keys["arrowdown"]) {
+          const nx = pl.x - Math.cos(pl.ang) * SPD,
+            ny = pl.y - Math.sin(pl.ang) * SPD;
+          if (!wall(nx, pl.y)) pl.x = nx;
+          if (!wall(pl.x, ny)) pl.y = ny;
+        }
+        if (keys["a"] || keys["arrowleft"]) pl.ang -= TSPD;
+        if (keys["d"] || keys["arrowright"]) pl.ang += TSPD;
+        if (S.sc > 0) S.sc--;
+        if (keys[" "] && S.sc === 0) {
+          S.sc = 14;
+          const h = cast(pl.x, pl.y, pl.ang);
+          S.enemies.forEach((e) => {
+            if (!e.alive) return;
+            const dx = e.x - pl.x,
+              dy = e.y - pl.y,
+              dist = Math.sqrt(dx * dx + dy * dy);
+            let ra = Math.atan2(dy, dx) - pl.ang;
+            while (ra > Math.PI) ra -= Math.PI * 2;
+            while (ra < -Math.PI) ra += Math.PI * 2;
+            if (
+              Math.abs(ra) < 0.14 &&
+              dist < h.depth + 12 &&
+              dist < MAXD * CELL
+            ) {
+              e.hp--;
+              spawnP(e.x, e.y, "#ff3355");
+              flashK();
+              if (e.hp <= 0) {
+                e.alive = false;
+                S.kills++;
+                spawnP(e.x, e.y, "#ffb300");
+              }
+            }
+          });
+        }
+        S.enemies.forEach((e) => {
+          if (!e.alive) return;
+          e.wob += 0.05;
+          const dx = pl.x - e.x,
+            dy = pl.y - e.y,
+            dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < e.ar) {
+            e.ang = Math.atan2(dy, dx);
+            const spd = e.spd * (1 + S.kills * 0.015);
+            const nx = e.x + Math.cos(e.ang) * spd,
+              ny = e.y + Math.sin(e.ang) * spd;
+            if (!wall(nx, e.y)) e.x = nx;
+            if (!wall(e.x, ny)) e.y = ny;
+            if (e.ac > 0) e.ac--;
+            else if (dist < 40 && S.dc === 0) {
+              e.ac = 80;
+              S.hp = Math.max(0, S.hp - 1);
+              S.df = 1;
+              S.dc = 45;
+            }
+          }
+        });
+        if (S.dc > 0) S.dc--;
+        if (S.df > 0) S.df -= 0.07;
+        if (S.hp <= 0 && S.started) {
+          S.started = false;
+          document.getElementById("ot").textContent = "YOU DIED";
+          document.getElementById("ot").style.color = "#ff3355";
+          document.getElementById("os").textContent = `KILLS: ${S.kills}`;
+          document.getElementById("od").innerHTML =
+            "The darkness consumed you.<br>Better luck next time.";
+          document.getElementById("ob").textContent =
+            "[ PRESS SPACE TO RESTART ]";
+          document.getElementById("overlay").classList.remove("off");
+        }
+      }
+
+      function spawnP(wx, wy, col) {
+        for (let i = 0; i < 7; i++)
+          S.parts.push({
+            wx,
+            wy,
+            col,
+            life: 1,
+            decay: 0.05 + Math.random() * 0.04,
+            ch: "*+·★"[Math.floor(Math.random() * 4)],
+            vy: (Math.random() - 0.5) * 4,
+            sy: 0,
+          });
+      }
+      function flashK() {
+        const el = document.getElementById("kf");
+        el.classList.add("on");
+        setTimeout(() => el.classList.remove("on"), 90);
+      }
+
+      function updateHUD() {
+        const hb = document.getElementById("hpbar");
+        if (hb.children.length !== S.maxhp) {
+          hb.innerHTML = "";
+          for (let i = 0; i < S.maxhp; i++) {
+            const p = document.createElement("div");
+            p.className = "pip";
+            hb.appendChild(p);
+          }
+        }
+        [...hb.children].forEach(
+          (p, i) => (p.className = "pip" + (i < S.hp ? " " : " e")),
+        );
+        document.getElementById("kv").textContent = S.kills;
+      }
+
+      // ── INPUT ─────────────────────────────────────────────────────────
+      document.addEventListener("keydown", (e) => {
+        const k = e.key.toLowerCase();
+        keys[k] = true;
+        if (!S.started && k === " ") startGame();
+        if (k === "f") S.flash = !S.flash;
+        if (k === "m") {
+          S.mmap = !S.mmap;
+          document.getElementById("minimap").classList.toggle("off", !S.mmap);
+        }
+        if (k === "g")
+          document.fullscreenElement
+            ? document.exitFullscreen()
+            : document.documentElement.requestFullscreen();
+        if (
+          [" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)
+        )
+          e.preventDefault();
+      });
+      document.addEventListener("keyup", (e) => {
+        keys[e.key.toLowerCase()] = false;
+      });
+
+      function startGame() {
+        S.started = true;
+        S.hp = S.maxhp;
+        S.kills = 0;
+        S.pl = { x: 1.5 * CELL, y: 1.5 * CELL, ang: 0.3 };
+        S.parts = [];
+        S.dc = 0;
+        S.df = 0;
+        spawnEnemies();
+        document.getElementById("overlay").classList.add("off");
+      }
+
+      // Touch
+      if ("ontouchstart" in window) {
+        [
+          { l: "↑", k: "arrowup", r: "50%", b: "160px" },
+          { l: "↓", k: "arrowdown", r: "50%", b: "80px" },
+          { l: "←", k: "arrowleft", r: "calc(50% + 65px)", b: "120px" },
+          { l: "→", k: "arrowright", r: "calc(50% - 65px)", b: "120px" },
+          { l: "🔥", k: " ", left: "24px", b: "100px" },
+        ].forEach(({ l, k, r, left, b }) => {
+          const btn = document.createElement("div");
+          btn.textContent = l;
+          Object.assign(btn.style, {
+            position: "fixed",
+            bottom: b,
+            right: r || "auto",
+            left: left || "auto",
+            transform: "translateX(-50%)",
+            width: "58px",
+            height: "58px",
+            background: "rgba(0,255,136,.12)",
+            border: "1px solid rgba(0,255,136,.4)",
+            color: "#00ff88",
+            fontSize: "22px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: "6px",
+            zIndex: "300",
+            fontFamily: "Courier New",
+          });
+          btn.addEventListener(
+            "touchstart",
+            (ev) => {
+              keys[k] = true;
+              if (!S.started && k === " ") startGame();
+              ev.preventDefault();
+            },
+            { passive: false },
+          );
+          btn.addEventListener(
+            "touchend",
+            (ev) => {
+              keys[k] = false;
+              ev.preventDefault();
+            },
+            { passive: false },
+          );
+          document.body.appendChild(btn);
+        });
+      }
+
+      // ── BOOT ──────────────────────────────────────────────────────────
+      PT.init();
+      spawnEnemies();
+      function loop() {
+        update();
+        render();
+        requestAnimationFrame(loop);
+      }
+      loop();
+    </script>
+  </body>
+</html>
